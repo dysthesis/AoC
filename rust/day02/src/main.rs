@@ -1,7 +1,4 @@
-use std::{
-    fmt::Display, fs::read_to_string, io::Error, num::ParseIntError, ops::RangeInclusive,
-    path::Path,
-};
+use std::{fmt::Display, fs::read_to_string, io::Error, num::ParseIntError, path::Path};
 
 use itertools::{Either, Itertools};
 
@@ -33,54 +30,68 @@ impl From<Error> for ParsingError {
 }
 
 #[derive(Clone)]
-struct Report(Vec<i32>);
+struct Report(Vec<u16>);
 
 impl Report {
-    /// Returns the number of elements to be removed for the report to be
-    /// monotonically increasing. If it returns 0, then it already is
-    /// monotonically increasing.
-    fn is_increasing(&self) -> usize {
-        let diff = self.differences();
-        let descending: Vec<i32> = diff.into_iter().filter(|&x| x > 0).collect();
-        dbg!(descending).len()
+    fn is_increasing(&self) -> bool {
+        let Report(data) = self;
+        let mut sorted = data.clone();
+        sorted.sort();
+        data.clone() == sorted
     }
 
-    fn is_decreasing(&self) -> usize {
-        let diff = self.differences();
-        let ascending: Vec<i32> = diff.into_iter().filter(|&x| x < 0).collect();
-        dbg!(ascending).len()
+    fn is_decreasing(&self) -> bool {
+        let Report(data) = self;
+        let mut sorted = data.clone();
+        sorted.sort_by(|a, b| b.cmp(a));
+        data.clone() == sorted
     }
 
     /// Check if a report is strictly increasing or strictly decreasing
     fn is_monotonic(&self) -> bool {
-        (self.is_increasing() <= 1) || (self.is_decreasing() <= 1)
+        self.is_increasing() || self.is_decreasing()
     }
 
-    /// Find the differences between consecutive elements
-    fn differences(&self) -> Vec<i32> {
+    /// Find the minimum and maximum difference between two consecutive elements
+    fn difference_range(&self) -> (Option<u16>, Option<u16>) {
         let Report(data) = self;
 
-        data.iter()
+        let diff: Vec<u16> = data
+            .iter()
             .zip(data.iter().skip(1))
-            .map(|(&x, &y)| x - y)
-            .collect()
-    }
-
-    fn too_large_differences(&self) -> usize {
-        let violations: Vec<i32> = self
-            .differences()
-            .into_iter()
-            .map(|x| x.abs())
-            .filter(|x| !RangeInclusive::new(1, 3).contains(x))
+            .map(|(&x, &y)| u16::abs_diff(x, y))
             .collect();
-        dbg!(violations).len()
+        (diff.iter().min().cloned(), diff.iter().max().cloned())
     }
 
     /// The problem defines a safe report as fulfilling both of the following conditions:
     /// - The levels are either all increasing or all decreasing.
     /// - Any two adjacent levels differ by at least one and at most three.
     fn is_safe(&self) -> Option<bool> {
-        Some(self.is_monotonic() && (self.too_large_differences() <= 1))
+        let (min, max) = self.difference_range();
+        let min = match min {
+            Some(value) => value,
+            None => return None,
+        };
+        let max = match max {
+            Some(value) => value,
+            None => return None,
+        };
+
+        Some(self.is_monotonic() && (min >= 1) && (max <= 3))
+    }
+
+    fn try_remove(&self) -> bool {
+        let Report(data) = self;
+        let safe: Vec<bool> = (0..data.len())
+            .filter_map(|i| {
+                let mut removed = data.clone();
+                removed.remove(i);
+                Report(removed).is_safe()
+            })
+            .filter(|&x| x)
+            .collect();
+        !safe.is_empty()
     }
 }
 
@@ -93,11 +104,11 @@ fn parse_input(path: &Path) -> Result<Vec<Report>, Vec<ParsingError>> {
         Err(e) => return Err(vec![ParsingError::from(e)]),
     };
 
-    let result: Vec<Vec<Result<i32, ParseIntError>>> = input
+    let result: Vec<Vec<Result<u16, ParseIntError>>> = input
         .trim()
         // Split the string line by line
         .split("\n")
-        .map(|str| -> Vec<Result<i32, ParseIntError>> {
+        .map(|str| -> Vec<Result<u16, ParseIntError>> {
             // Split the string by column...
             str.split(" ")
                 // ...and try to parse it.
@@ -111,7 +122,7 @@ fn parse_input(path: &Path) -> Result<Vec<Report>, Vec<ParsingError>> {
         result
             .into_iter()
             .fold((Vec::new(), Vec::new()), |mut acc, curr| {
-                let (succ, err): (Vec<i32>, Vec<ParsingError>) =
+                let (succ, err): (Vec<u16>, Vec<ParsingError>) =
                     // Put any successess into `succ` and errors into `err`
                     curr.into_iter().partition_map(|x| match x {
                         Ok(res) => Either::Left(res),
@@ -138,12 +149,14 @@ fn main() {
         Ok(result) => result,
         Err(errors) => panic!("Failed to parse data: {:?}", errors),
     };
-    let safe_count: i32 = reports.iter().fold(0, |count, curr| {
-        if curr.is_safe().expect("This report has no content!") {
-            count + 1
+    let (p1, p2): (u16, u16) = reports.iter().fold((0, 0), |count, curr| {
+        if curr.is_safe().expect("the report to have content") {
+            (count.0 + 1, count.1 + 1)
+        } else if curr.try_remove() {
+            (count.0, count.1 + 1)
         } else {
             count
         }
     });
-    println!("There are {safe_count} safe reports!")
+    println!("There are {p1} safe reports for part 1 and {p2} for part 2!");
 }
